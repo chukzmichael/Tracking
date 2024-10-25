@@ -16,12 +16,17 @@
 (define-constant ERROR-MAXIMUM-DOSES-REACHED (err u110))
 (define-constant ERROR-MINIMUM-DOSE-INTERVAL-NOT-MET (err u111))
 (define-constant ERROR-CONTRACT-OWNER-ONLY (err u112))
+(define-constant ERROR-INVALID-INPUT (err u113))
+(define-constant ERROR-INVALID-EXPIRY-DATE (err u114))
+(define-constant ERROR-INVALID-STORAGE-CAPACITY (err u115))
 
 ;; Constants
 (define-constant MINIMUM-STORAGE-TEMPERATURE (- 70))
-(define-constant MAXIMUM-STORAGE-TEMPERATURE 8)
+(define-constant MAXIMUM_STORAGE_TEMPERATURE 8)
 (define-constant MINIMUM-DAYS-BETWEEN-DOSES u21) ;; 21 days minimum between doses
 (define-constant MAXIMUM-DOSES-PER-PATIENT u4)
+(define-constant MINIMUM_STRING_LENGTH u1)
+(define-constant CURRENT_BLOCK block-height)
 
 ;; Data Maps
 (define-map vaccine-batches
@@ -85,6 +90,31 @@
     (is-eq tx-sender (var-get vaccine-contract-owner))
 )
 
+;; Updated validate-string functions for different string lengths
+(define-private (validate-string-32 (input (string-ascii 32)))
+    (> (len input) MINIMUM_STRING_LENGTH)
+)
+
+(define-private (validate-string-50 (input (string-ascii 50)))
+    (> (len input) MINIMUM_STRING_LENGTH)
+)
+
+(define-private (validate-string-100 (input (string-ascii 100)))
+    (> (len input) MINIMUM_STRING_LENGTH)
+)
+
+(define-private (validate-string-200 (input (string-ascii 200)))
+    (> (len input) MINIMUM_STRING_LENGTH)
+)
+
+(define-private (validate-future-date (date uint))
+    (> date CURRENT_BLOCK)
+)
+
+(define-private (validate-storage-capacity (capacity uint))
+    (> capacity u0)
+)
+
 ;; Read-only Functions
 (define-read-only (get-vaccine-contract-owner)
     (ok (var-get vaccine-contract-owner))
@@ -92,9 +122,7 @@
 
 (define-read-only (is-provider-authorized (provider-address principal))
     (match (map-get? healthcare-providers provider-address)
-        provider-info (and 
-            (is-some provider-info)
-            (>= (get credentials-expiry-date provider-info) block-height))
+        provider-info (>= (get credentials-expiry-date provider-info) CURRENT_BLOCK)
         false
     )
 )
@@ -114,6 +142,9 @@
     (credentials-expiry-date uint))
     (begin
         (asserts! (is-vaccine-contract-owner) ERROR-NOT-AUTHORIZED)
+        (asserts! (validate-string-20 provider-role) ERROR-INVALID-INPUT)
+        (asserts! (validate-string-100 healthcare-facility) ERROR-INVALID-INPUT)
+        (asserts! (validate-future-date credentials-expiry-date) ERROR-INVALID-EXPIRY-DATE)
         (ok (map-set healthcare-providers 
             provider-address 
             {
@@ -130,6 +161,9 @@
     (maximum-storage-capacity uint))
     (begin
         (asserts! (is-vaccine-contract-owner) ERROR-NOT-AUTHORIZED)
+        (asserts! (validate-string-100 facility-id) ERROR-INVALID-INPUT)
+        (asserts! (validate-string-200 facility-address) ERROR-INVALID-INPUT)
+        (asserts! (validate-storage-capacity maximum-storage-capacity) ERROR-INVALID-STORAGE-CAPACITY)
         (ok (map-set vaccine-storage-facilities
             facility-id
             {
@@ -152,11 +186,16 @@
     (storage-facility (string-ascii 100)))
     (begin
         (asserts! (is-provider-authorized tx-sender) ERROR-NOT-AUTHORIZED)
+        (asserts! (validate-string-32 vaccine-batch-id) ERROR-INVALID-INPUT)
+        (asserts! (validate-string-50 vaccine-manufacturer) ERROR-INVALID-INPUT)
+        (asserts! (validate-string-50 vaccine-name) ERROR-INVALID-INPUT)
+        (asserts! (validate-string-100 storage-facility) ERROR-INVALID-INPUT)
         (asserts! (is-none (map-get? vaccine-batches {vaccine-batch-id: vaccine-batch-id})) ERROR-BATCH-EXISTS)
-        (asserts! (> initial-quantity u0) ERROR-INVALID-BATCH)
+        (asserts! (validate-storage-capacity initial-quantity) ERROR-INVALID-BATCH)
+        (asserts! (validate-future-date batch-expiry-date) ERROR-INVALID-EXPIRY-DATE)
         (asserts! (> batch-expiry-date manufacturing-date) ERROR-INVALID-BATCH)
         (asserts! (and (>= storage-temperature MINIMUM-STORAGE-TEMPERATURE) 
-                      (<= storage-temperature MAXIMUM-STORAGE-TEMPERATURE)) 
+                      (<= storage-temperature MAXIMUM_STORAGE_TEMPERATURE)) 
                  ERROR-TEMPERATURE-OUT-OF-RANGE)
         
         (ok (map-set vaccine-batches 
@@ -181,6 +220,8 @@
     (new-batch-status (string-ascii 20)))
     (begin
         (asserts! (is-provider-authorized tx-sender) ERROR-NOT-AUTHORIZED)
+        (asserts! (validate-string-32 vaccine-batch-id) ERROR-INVALID-INPUT)
+        (asserts! (validate-string-20 new-batch-status) ERROR-INVALID-INPUT)
         (match (map-get? vaccine-batches {vaccine-batch-id: vaccine-batch-id})
             batch-info (ok (map-set vaccine-batches 
                 {vaccine-batch-id: vaccine-batch-id}
@@ -195,6 +236,7 @@
     (breach-temperature int))
     (begin
         (asserts! (is-provider-authorized tx-sender) ERROR-NOT-AUTHORIZED)
+        (asserts! (validate-string-32 vaccine-batch-id) ERROR-INVALID-INPUT)
         (match (map-get? vaccine-batches {vaccine-batch-id: vaccine-batch-id})
             batch-info (ok (map-set vaccine-batches 
                 {vaccine-batch-id: vaccine-batch-id}
@@ -215,12 +257,15 @@
     (vaccination-site (string-ascii 100)))
     (begin
         (asserts! (is-provider-authorized tx-sender) ERROR-NOT-AUTHORIZED)
+        (asserts! (validate-string-32 patient-identifier) ERROR-INVALID-PATIENT-ID)
+        (asserts! (validate-string-32 vaccine-batch-id) ERROR-INVALID-INPUT)
+        (asserts! (validate-string-100 vaccination-site) ERROR-INVALID-VACCINATION-LOCATION)
         
         (match (map-get? vaccine-batches {vaccine-batch-id: vaccine-batch-id})
             batch-info (begin
                 (asserts! (> (get available-doses batch-info) u0) ERROR-INSUFFICIENT-VACCINE-QUANTITY)
                 (asserts! (is-eq (get batch-status batch-info) "active") ERROR-INVALID-BATCH)
-                (asserts! (<= block-height (get batch-expiry-date batch-info)) ERROR-VACCINE-BATCH-EXPIRED)
+                (asserts! (<= CURRENT_BLOCK (get batch-expiry-date batch-info)) ERROR-VACCINE-BATCH-EXPIRED)
                 
                 (match (map-get? patient-vaccination-records {patient-identifier: patient-identifier})
                     vaccination-record (begin
@@ -228,7 +273,7 @@
                                 ERROR-MAXIMUM-DOSES-REACHED)
                         (let ((current-dose-number (+ (get completed-doses vaccination-record) u1)))
                             (if (> current-dose-number u1)
-                                (asserts! (>= (- block-height 
+                                (asserts! (>= (- CURRENT_BLOCK 
                                     (get administration-date (unwrap-panic (element-at 
                                         (get vaccination-history vaccination-record) 
                                         (- current-dose-number u2))))) 
@@ -244,12 +289,12 @@
                                         (append (get vaccination-history vaccination-record)
                                             {
                                                 vaccine-batch-id: vaccine-batch-id,
-                                                administration-date: block-height,
+                                                administration-date: CURRENT_BLOCK,
                                                 vaccine-type: (get vaccine-name batch-info),
                                                 dose-sequence-number: current-dose-number,
                                                 healthcare-provider: tx-sender,
                                                 vaccination-site: vaccination-site,
-                                                next-vaccination-date: (some (+ block-height MINIMUM-DAYS-BETWEEN-DOSES))
+                                                next-vaccination-date: (some (+ CURRENT_BLOCK MINIMUM-DAYS-BETWEEN-DOSES))
                                             }
                                         ) u10)),
                                     completed-doses: current-dose-number,
@@ -263,12 +308,12 @@
                             vaccination-history: (list 
                                 {
                                     vaccine-batch-id: vaccine-batch-id,
-                                    administration-date: block-height,
+                                    administration-date: CURRENT_BLOCK,
                                     vaccine-type: (get vaccine-name batch-info),
                                     dose-sequence-number: u1,
                                     healthcare-provider: tx-sender,
                                     vaccination-site: vaccination-site,
-                                    next-vaccination-date: (some (+ block-height MINIMUM-DAYS-BETWEEN-DOSES))
+                                    next-vaccination-date: (some (+ CURRENT_BLOCK MINIMUM-DAYS-BETWEEN-DOSES))
                                 }),
                             completed-doses: u1,
                             reported-side-effects: (list),
@@ -298,8 +343,13 @@
         batch-info (and
             (is-eq (get batch-status batch-info) "active")
             (> (get available-doses batch-info) u0)
-            (<= block-height (get batch-expiry-date batch-info))
+            (<= CURRENT_BLOCK (get batch-expiry-date batch-info))
             (<= (get temperature-breach-count batch-info) u2))
         false
     )
+)
+
+;; Add validate-string-20 function that was referenced but missing
+(define-private (validate-string-20 (input (string-ascii 20)))
+    (> (len input) MINIMUM_STRING_LENGTH)
 )
